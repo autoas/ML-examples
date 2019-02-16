@@ -1,16 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "mbed.h"
 #include "arm_math.h"
 #include "parameter.h"
 #include "weights.h"
 #include "arm_nnfunctions.h"
-
-Serial pc(USBTX, USBRX);
-Timer t;
-int start_time, stop_time;
-
 
 static q7_t conv1_wt[CONV1_IN_CH*CONV1_KER_DIM*CONV1_KER_DIM*CONV1_OUT_CH] = CONV1_WT;
 static q7_t conv1_bias[CONV1_OUT_CH] = CONV1_BIAS;
@@ -46,21 +40,43 @@ void run_nn() {
   arm_fully_connected_q7_opt(buffer2, ip1_wt, IP1_IN_DIM, IP1_OUT_DIM, IP1_BIAS_LSHIFT, IP1_OUT_RSHIFT, ip1_bias, output_data, (q15_t*)col_buffer);
 }
 
-int main () {
-  //TODO: Get input_data (images) from camera 
-  //Add mean subtraction code here 
-  t.start();
-  t.reset();
-  start_time = t.read_us();
-  run_nn();
-  stop_time = t.read_us();
-  t.stop();
-  pc.printf("Final output: "); 
-  for (int i=0;i<10;i++)
-  {
-    pc.printf("%d ", output_data[i]);
+int main (int argc, char* argv[]) {
+  if(argc > 1) {
+    FILE* fp = fopen(argv[1],"rb");
+    if(NULL != fp) {
+      fread(input_data, 1, sizeof(input_data), fp);
+      fclose(fp);
+    } else {
+      printf("file %s not exists.\n", argv[1]);
+      return -2;
+    }
+  } else {
+    printf("usage: %s img.bin\n", argv[0]);
+    return -1;
   }
-  pc.printf("\r\n");
+
+  /* input pre-processing */
+  #define INPUT_MEAN_SHIFT {125,123,114}
+  #define INPUT_RIGHT_SHIFT {8,8,8}
+  int mean_data[3] = INPUT_MEAN_SHIFT;
+  unsigned int scale_data[3] = INPUT_RIGHT_SHIFT;
+  for (int i=0;i<32*32*3; i+=3) {
+    input_data[i] =   (q7_t)__SSAT( ((((int)input_data[i]   - mean_data[0])<<7) + (0x1<<(scale_data[0]-1)))
+                             >> scale_data[0], 8);
+    input_data[i+1] = (q7_t)__SSAT( ((((int)input_data[i+1] - mean_data[1])<<7) + (0x1<<(scale_data[1]-1)))
+                             >> scale_data[1], 8);
+    input_data[i+2] = (q7_t)__SSAT( ((((int)input_data[i+2] - mean_data[2])<<7) + (0x1<<(scale_data[2]-1)))
+                             >> scale_data[2], 8);
+  }
+
+  run_nn();
+
+  static const char* CIFAR10_LABELS_LIST[] = { "airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck" };
+  for (int i = 0; i < 10; i++)
+  {
+      /* Q to Float: Q7*2^-7 */
+      printf("%s: %d.%d%%\n", CIFAR10_LABELS_LIST[i], output_data[i]*100/128, (output_data[i]*1000/128)%10);
+  }
 
   return 0;
 }
